@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { getMetalMarketData } from './services/geminiService';
-import { MetalData, MarketSummary } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { getMetalMarketData, chatWithAnalyst } from './services/geminiService';
+import { MetalData, MarketSummary, ChatMessage } from './types';
 import MetalCard from './components/MetalCard';
 
 const REFRESH_INTERVAL = 600; 
@@ -11,6 +11,13 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL);
+
+  // Chat State
+  const [chatInput, setChatInput] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [chatMode, setChatMode] = useState<'fast' | 'grounded' | 'thinking'>('fast');
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const fetchData = async () => {
     try {
@@ -40,6 +47,36 @@ const App: React.FC = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || isChatLoading || !data) return;
+
+    const userMessage: ChatMessage = { role: 'user', content: chatInput };
+    setMessages(prev => [...prev, userMessage]);
+    setChatInput('');
+    setIsChatLoading(true);
+
+    try {
+      const context = `Sentiment: ${data.summary.sentiment}. FX: USD/INR=${data.summary.fx.usdinr}. Hubs: ${data.hubs.map(h => `${h.name}: ${h.currency}${h.currentPrice}`).join(', ')}`;
+      const response = await chatWithAnalyst(chatInput, chatMode, context);
+      
+      const assistantMessage: ChatMessage = { 
+        role: 'assistant', 
+        content: response.text,
+        isThinking: chatMode === 'thinking'
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: "Error connecting to analyst terminal." }]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
 
   const formatCountdown = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -204,6 +241,95 @@ const App: React.FC = () => {
               </div>
            </div>
         </div>
+
+        {/* Bullion Analyst Chat Terminal */}
+        <section className="mt-12 space-y-6">
+          <div className="flex items-center gap-4">
+            <h2 className="text-xs font-black uppercase tracking-[0.3em] text-indigo-400">Bullion Analyst Terminal</h2>
+            <div className="h-px bg-slate-800 flex-1"></div>
+          </div>
+          <div className="bg-slate-900/60 border border-slate-800 rounded-3xl overflow-hidden flex flex-col h-[500px]">
+            {/* Chat Header / Controls */}
+            <div className="bg-slate-800/50 p-4 border-b border-slate-700 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex gap-2">
+                {(['fast', 'grounded', 'thinking'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setChatMode(mode)}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                      chatMode === mode 
+                        ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' 
+                        : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {mode === 'thinking' ? 'Deep Think (Pro)' : mode === 'grounded' ? 'Live Search (Flash)' : 'Fast AI (Lite)'}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[9px] text-slate-600 font-bold uppercase tracking-widest">
+                {chatMode === 'thinking' ? 'Gemini 3 Pro + 32K Thinking' : chatMode === 'grounded' ? 'Gemini 3 Flash + Google Search' : 'Gemini 2.5 Flash Lite'}
+              </span>
+            </div>
+
+            {/* Messages Area */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {messages.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
+                  <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center text-indigo-400">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
+                  </div>
+                  <p className="text-[10px] font-black uppercase tracking-widest">Analyst is on standby</p>
+                </div>
+              )}
+              {messages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[80%] p-4 rounded-2xl text-xs leading-relaxed ${
+                    msg.role === 'user' 
+                      ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-100' 
+                      : 'bg-slate-800/50 border border-slate-700 text-slate-300'
+                  }`}>
+                    {msg.isThinking && <div className="text-[8px] font-black uppercase text-indigo-400 mb-2 tracking-[0.2em]">Thinking Output Processed</div>}
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              {isChatLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-2xl flex items-center gap-3">
+                    <div className="flex gap-1">
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    </div>
+                    <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      {chatMode === 'thinking' ? 'Reasoning...' : 'Analyzing...'}
+                    </span>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Input Area */}
+            <form onSubmit={handleSendMessage} className="p-4 bg-slate-800/30 border-t border-slate-800 flex gap-3">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder={chatMode === 'thinking' ? "Ask a complex market question..." : "Ask the analyst anything..."}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-xs focus:outline-none focus:border-indigo-500 transition-colors"
+                disabled={isChatLoading}
+              />
+              <button
+                type="submit"
+                disabled={isChatLoading || !chatInput.trim()}
+                className="bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-indigo-500/20"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+        </section>
       </main>
     </div>
   );

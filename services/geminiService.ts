@@ -31,10 +31,12 @@ export const getMetalMarketData = async (): Promise<{
   hubs: MetalData[];
   summary: MarketSummary 
 }> => {
-  const model = "gemini-3-flash-preview";
+  // Use Lite model for fast initial data population
+  const fastModel = "gemini-2.5-flash-lite-latest";
+  const searchModel = "gemini-3-flash-preview";
   
   const dataResponse = await ai.models.generateContent({
-    model,
+    model: fastModel,
     contents: `Act as a financial data provider. Provide current prices, 24h high/low, % change, volatility, and 5-day historical closing prices for:
     1. USA Hub: Gold Spot (USD/oz), Silver Spot (USD/oz)
     2. China Hub: Shanghai Gold (CNY/g), Shanghai Silver (CNY/g)
@@ -94,8 +96,9 @@ export const getMetalMarketData = async (): Promise<{
     { region: 'India', name: 'IN Silver', symbol: 'MCX', currency: '₹', unit: 'kg', ...raw.india?.silver },
   ].filter(d => d.currentPrice !== undefined);
 
+  // Use Flash model for grounded search data
   const analysisAndPredictionsResponse = await ai.models.generateContent({
-    model,
+    model: searchModel,
     contents: "Analyze global bullion markets and provide 7-day price forecasts for Gold and Silver. Include confidence intervals (low/high bounds) and the logical reasoning based on trends. Also discuss price spreads between hubs.",
     config: { 
       tools: [{ googleSearch: {} }],
@@ -144,5 +147,42 @@ export const getMetalMarketData = async (): Promise<{
       fx: raw.fx || { usdinr: 83, usdcny: 7.2, usdaed: 3.67 },
       predictions: summaryData.predictions || []
     }
+  };
+};
+
+export const chatWithAnalyst = async (
+  query: string, 
+  mode: 'fast' | 'grounded' | 'thinking',
+  marketContext: string
+): Promise<{ text: string; sources?: { title: string; uri: string }[] }> => {
+  let model = "gemini-2.5-flash-lite-latest";
+  let tools: any[] | undefined = undefined;
+  let thinkingConfig: any = undefined;
+
+  if (mode === 'grounded') {
+    model = "gemini-3-flash-preview";
+    tools = [{ googleSearch: {} }];
+  } else if (mode === 'thinking') {
+    model = "gemini-3-pro-preview";
+    thinkingConfig = { thinkingBudget: 32768 };
+  }
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: `Context: You are the Lumina Bullion Analyst. Here is the current market state: ${marketContext}. 
+    User Question: ${query}`,
+    config: {
+      tools,
+      thinkingConfig,
+      systemInstruction: "You are a senior bullion market analyst. Provide concise, expert-level insights. If using thinking mode, be extremely thorough. If using grounded mode, cite current market news."
+    }
+  });
+
+  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const sources = groundingChunks.filter((c: any) => c.web).map((c: any) => ({ title: c.web.title, uri: c.web.uri }));
+
+  return { 
+    text: response.text || "I'm sorry, I couldn't process that request.",
+    sources: sources.length > 0 ? sources : undefined
   };
 };

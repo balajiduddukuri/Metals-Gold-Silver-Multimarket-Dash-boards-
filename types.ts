@@ -44,3 +44,9 @@ export interface MarketSummary {
   };
   predictions: MetalPrediction[];
 }
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  isThinking?: boolean;
+}
